@@ -8,6 +8,7 @@ description = "Checks Garry's Mod shaders against ToGL, the DX9 to OpenGL layer 
 
 [dependencies]
 lzma-rs = "0.3"
+serde_json = { version = "1", features = ["preserve_order"] }
 
 [build-dependencies]
 cc = "1"
