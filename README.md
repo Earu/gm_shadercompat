@@ -62,6 +62,20 @@ Checked against GMod's own `libtogl_client.so` on 350k combos of GMod's stock sh
 
 Things ToGL rejects include `tex3Dlod`/`texCUBElod`, `tex*grad` (`texldd`), loops compiled to `loop aL`, unconditional `break` and predicates.
 
+## Library
+
+The crate is also a library (gm_autoshader uses it):
+
+```toml
+gm_shadercompat = { git = "https://github.com/Earu/gm_shadercompat" }
+```
+
+- `compile(hlsl, &Compiler { exe, wine }, debug_info, run_to_end)` compiles with your own `ShaderCompile.exe`. `run` spawns the command, so the caller can track or kill the process.
+- `Checker::check_vcs(shader, bytes, glsl_dir)` runs ToGL on every combo. `Checker::add_compile_failure` turns a failed compile into diagnostics.
+- `Diagnostic::render_as(style, "warning", root)` renders with another label and paths relative to `root`. `Diagnostic::json` gives the JSON form.
+
+The library does not bundle the compiler; only the CLI embeds `bin/`.
+
 ## Building
 
 Prebuilt Linux and Windows binaries are attached to each GitHub release, and to every CI run as artifacts.

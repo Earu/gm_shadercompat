@@ -195,7 +195,11 @@ pub fn find_name(line: &str, names: &[String]) -> Vec<(usize, usize)> {
 }
 
 pub fn display(path: &Path) -> String {
-	let cwd = std::env::current_dir().ok();
-	let shown = cwd.as_deref().and_then(|cwd| path.strip_prefix(cwd).ok()).unwrap_or(path);
+	display_in(path, None)
+}
+
+pub fn display_in(path: &Path, root: Option<&Path>) -> String {
+	let root = root.map(Path::to_path_buf).or_else(|| std::env::current_dir().ok());
+	let shown = root.as_deref().and_then(|root| path.strip_prefix(root).ok()).unwrap_or(path);
 	shown.display().to_string()
 }

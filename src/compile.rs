@@ -1,11 +1,22 @@
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
 
 use crate::dbug::host_path;
 
-const COMPILER: &[u8] = include_bytes!("../bin/ShaderCompile.exe");
-const D3DCOMPILER: &[u8] = include_bytes!("../bin/d3dcompiler_47.dll");
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+pub struct Compiler {
+	pub exe: PathBuf,
+	pub wine: Option<String>,
+}
+
+pub struct Compiled {
+	pub vcs: Vec<u8>,
+	pub log: String,
+}
 
 pub struct FxcMessage {
 	pub file: PathBuf,
@@ -34,30 +45,27 @@ impl From<&str> for CompileFailure {
 	}
 }
 
-fn tool_dir() -> Result<PathBuf, String> {
-	let dir = std::env::temp_dir().join(format!("gm_shadercompat-{}", env!("CARGO_PKG_VERSION")));
-	fs::create_dir_all(&dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
-
-	for (name, bytes) in [("ShaderCompile.exe", COMPILER), ("d3dcompiler_47.dll", D3DCOMPILER)] {
-		let path = dir.join(name);
-		if fs::metadata(&path).map(|m| m.len() as usize == bytes.len()).unwrap_or(false) {
-			continue;
-		}
-		fs::write(&path, bytes).map_err(|e| format!("cannot write {}: {e}", path.display()))?;
-	}
-
-	Ok(dir)
+pub fn run_to_end(command: &mut Command) -> io::Result<(ExitStatus, Vec<u8>)> {
+	let output = command.output()?;
+	Ok((output.status, output.stdout))
 }
 
-fn command(exe: &Path, wine: Option<&str>) -> Command {
-	match wine {
+fn command(compiler: &Compiler) -> Command {
+	let mut cmd = match &compiler.wine {
 		Some(wine) => {
 			let mut cmd = Command::new(wine);
-			cmd.arg(exe).env("WINEDLLOVERRIDES", "d3dcompiler_47=n").env("WINEDEBUG", "-all");
+			cmd.arg(&compiler.exe).env("WINEDLLOVERRIDES", "d3dcompiler_47=n").env("WINEDEBUG", "-all");
 			cmd
 		}
-		None => Command::new(exe),
+		None => Command::new(&compiler.exe),
+	};
+	#[cfg(windows)]
+	{
+		use std::os::windows::process::CommandExt;
+		cmd.creation_flags(CREATE_NO_WINDOW);
 	}
+	cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
+	cmd
 }
 
 fn parse_message(line: &str, base: &Path) -> Option<FxcMessage> {
@@ -99,7 +107,18 @@ fn parse_log(log: &str, base: &Path) -> Vec<FxcMessage> {
 	out
 }
 
-pub fn compile(hlsl: &Path, wine: Option<&str>) -> Result<Vec<u8>, CompileFailure> {
+fn readable(log: &[u8]) -> String {
+	let log = String::from_utf8_lossy(log);
+	let lines: Vec<&str> = log.split(['\r', '\n']).map(str::trim_end).filter(|l| !l.is_empty()).collect();
+	lines.join("\n")
+}
+
+pub fn compile(
+	hlsl: &Path,
+	compiler: &Compiler,
+	debug_info: bool,
+	run: impl FnOnce(&mut Command) -> io::Result<(ExitStatus, Vec<u8>)>,
+) -> Result<Compiled, CompileFailure> {
 	let hlsl = std::path::absolute(hlsl).map_err(|e| format!("{}: {e}", hlsl.display()))?;
 	if !hlsl.is_file() {
 		return Err("file not found".into());
@@ -115,24 +134,23 @@ pub fn compile(hlsl: &Path, wine: Option<&str>) -> Result<Vec<u8>, CompileFailur
 	let vcs_path = out_dir.join(format!("{stem}.vcs"));
 	let previous = fs::read(&vcs_path).ok();
 
-	let exe = tool_dir()?.join("ShaderCompile.exe");
-	let output = command(&exe, wine)
-		.args(["/O", "3", "-debug-info", "-ver", ver, "-shaderpath"])
-		.arg(&source_dir)
-		.arg(&hlsl)
-		.current_dir(&source_dir)
-		.stdin(Stdio::null())
-		.output()
-		.map_err(|e| format!("cannot run the shader compiler: {e}"))?;
+	let mut cmd = command(compiler);
+	cmd.args(["/O", "3"]);
+	if debug_info {
+		cmd.arg("-debug-info");
+	}
+	cmd.args(["-ver", ver, "-shaderpath"]).arg(&source_dir).arg(&hlsl).current_dir(&source_dir);
 
-	let result = match fs::read(&vcs_path) {
-		Ok(bytes) if output.status.success() => Ok(bytes),
-		_ => {
-			let log = String::from_utf8_lossy(&output.stdout);
-			let messages = parse_log(&log, &source_dir).into_iter().filter(|m| !m.warning).collect();
-			let log: Vec<&str> = log.split(['\r', '\n']).map(str::trim_end).filter(|l| !l.is_empty()).collect();
-			Err(CompileFailure { messages, log: log.join("\n") })
-		}
+	let result = match run(&mut cmd) {
+		Err(e) => Err(format!("cannot run the shader compiler: {e}").into()),
+		Ok((status, log)) => match fs::read(&vcs_path) {
+			Ok(vcs) if status.success() => Ok(Compiled { vcs, log: readable(&log) }),
+			_ => {
+				let text = String::from_utf8_lossy(&log);
+				let messages = parse_log(&text, &source_dir).into_iter().filter(|m| !m.warning).collect();
+				Err(CompileFailure { messages, log: readable(&log) })
+			}
+		},
 	};
 
 	match previous {

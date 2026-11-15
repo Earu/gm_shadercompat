@@ -1,8 +1,8 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
 
-use crate::source::display;
+use crate::source::display_in;
 
 pub struct Span {
 	pub file: PathBuf,
@@ -55,6 +55,10 @@ impl Style {
 		self.green("ok")
 	}
 
+	fn label(self, label: &str, text: &str) -> String {
+		self.paint(if label == "error" { "1;31" } else { "1;33" }, text)
+	}
+
 	fn red(self, text: &str) -> String {
 		self.paint("1;31", text)
 	}
@@ -84,8 +88,8 @@ fn plural(n: usize, word: &str) -> String {
 	}
 }
 
-fn describe_use(u: &Use) -> String {
-	let name = display(&u.shader);
+fn describe_use(u: &Use, root: Option<&Path>) -> String {
+	let name = display_in(&u.shader, root);
 	let count = u.combos.len();
 	if u.total <= 1 {
 		name
@@ -97,7 +101,7 @@ fn describe_use(u: &Use) -> String {
 }
 
 impl Diagnostic {
-	fn uses_note(&self) -> Option<String> {
+	fn uses_note(&self, root: Option<&Path>) -> Option<String> {
 		if self.uses.is_empty() {
 			return None;
 		}
@@ -114,7 +118,7 @@ impl Diagnostic {
 		}
 
 		const SHOWN: usize = 6;
-		let mut parts: Vec<String> = self.uses.iter().take(SHOWN).map(describe_use).collect();
+		let mut parts: Vec<String> = self.uses.iter().take(SHOWN).map(|u| describe_use(u, root)).collect();
 		if self.uses.len() > SHOWN {
 			parts.push(format!("and {} more", self.uses.len() - SHOWN));
 		}
@@ -123,9 +127,13 @@ impl Diagnostic {
 	}
 
 	pub fn render(&self, style: Style) -> String {
+		self.render_as(style, "error", None)
+	}
+
+	pub fn render_as(&self, style: Style, label: &str, root: Option<&Path>) -> String {
 		let mut out = String::new();
 		let code = if self.code.is_empty() { String::new() } else { format!("[{}]", self.code) };
-		out.push_str(&format!("{}: {}\n", style.red(&format!("error{code}")), style.bold(&self.message)));
+		out.push_str(&format!("{}: {}\n", style.label(label, &format!("{label}{code}")), style.bold(&self.message)));
 
 		let gutter = self.span.as_ref().map_or(1, |s| s.line.to_string().len());
 		let pad = " ".repeat(gutter);
@@ -134,7 +142,7 @@ impl Diagnostic {
 		match &self.span {
 			Some(span) => {
 				let column = span.columns.first().map_or(String::new(), |(start, _)| format!(":{start}"));
-				out.push_str(&format!("{pad}{} {}:{}{column}\n", style.blue("-->"), display(&span.file), span.line));
+				out.push_str(&format!("{pad}{} {}:{}{column}\n", style.blue("-->"), display_in(&span.file, root), span.line));
 				if let Some(text) = &span.text {
 					let shown = text.replace('\t', "    ");
 					out.push_str(&format!("{pad} {bar}\n"));
@@ -157,14 +165,14 @@ impl Diagnostic {
 						marks.push_str(&"^".repeat(width(&marked).max(1)));
 						cursor = end.max(start + 1);
 					}
-					out.push_str(&format!("{pad} {bar} {}\n", style.red(&marks)));
+					out.push_str(&format!("{pad} {bar} {}\n", style.label(label, &marks)));
 					out.push_str(&format!("{pad} {bar}\n"));
 				}
 			}
 			None => {
 				if let Some(u) = self.uses.first() {
 					let at = self.instruction.as_ref().map_or(String::new(), |i| format!(", instruction {} (`{}`)", i.index, i.opcode));
-					out.push_str(&format!("{pad}{} {}{at}\n", style.blue("-->"), display(&u.shader)));
+					out.push_str(&format!("{pad}{} {}{at}\n", style.blue("-->"), display_in(&u.shader, root)));
 				}
 			}
 		}
@@ -173,7 +181,7 @@ impl Diagnostic {
 		if let Some(function) = &self.function {
 			notes.push(format!("in function `{function}`"));
 		}
-		notes.extend(self.uses_note());
+		notes.extend(self.uses_note(root));
 		notes.extend(self.notes.iter().cloned());
 		for note in notes {
 			out.push_str(&format!("{pad} {} {}: {note}\n", style.blue("="), style.bold("note")));
@@ -191,7 +199,7 @@ impl Diagnostic {
 			"code": self.code,
 			"message": self.message,
 			"span": self.span.as_ref().map(|s| json!({
-				"file": display(&s.file),
+				"file": display_in(&s.file, None),
 				"line": s.line,
 				"column": s.columns.first().map(|c| c.0),
 				"end_column": s.columns.first().map(|c| c.1),
@@ -200,7 +208,7 @@ impl Diagnostic {
 			})),
 			"function": self.function,
 			"shaders": self.uses.iter().map(|u| json!({
-				"file": display(&u.shader),
+				"file": display_in(&u.shader, None),
 				"combos": u.combos.iter().map(|&(s, d)| json!({ "static": s, "dynamic": d })).collect::<Vec<_>>(),
 				"total_combos": u.total,
 			})).collect::<Vec<_>>(),

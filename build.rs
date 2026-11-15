@@ -22,9 +22,15 @@ fn main() {
 		build.cpp_link_stdlib(None);
 	}
 
+	let compiler = build.get_compiler();
 	build.compile("togl");
 
 	if windows_gnu {
+		let found = std::process::Command::new(compiler.path()).arg("-print-file-name=libstdc++.a").output().ok();
+		let path = found.map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();
+		if let Some(dir) = std::path::Path::new(&path).parent().filter(|d| d.is_absolute()) {
+			println!("cargo:rustc-link-search=native={}", dir.display());
+		}
 		println!("cargo:rustc-link-lib=static=stdc++");
 	}
 }
