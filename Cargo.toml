@@ -1,0 +1,13 @@
+[package]
+name = "gm_shadercompat"
+version = "0.1.0"
+edition = "2021"
+authors = ["Earu"]
+license = "MIT"
+description = "Checks Garry's Mod shaders against ToGL, the DX9 to OpenGL layer of the native Linux and macOS builds"
+
+[dependencies]
+lzma-rs = "0.3"
+
+[build-dependencies]
+cc = "1"
