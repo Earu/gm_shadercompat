@@ -22,7 +22,23 @@ pub struct Instruction {
 	pub opcode: &'static str,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Level {
+	Error,
+	Warning,
+}
+
+impl Level {
+	pub fn label(self) -> &'static str {
+		match self {
+			Level::Error => "error",
+			Level::Warning => "warning",
+		}
+	}
+}
+
 pub struct Diagnostic {
+	pub level: Level,
 	pub code: String,
 	pub message: String,
 	pub span: Option<Span>,
@@ -127,7 +143,7 @@ impl Diagnostic {
 	}
 
 	pub fn render(&self, style: Style) -> String {
-		self.render_as(style, "error", None)
+		self.render_as(style, self.level.label(), None)
 	}
 
 	pub fn render_as(&self, style: Style, label: &str, root: Option<&Path>) -> String {
@@ -195,7 +211,7 @@ impl Diagnostic {
 	pub fn json(&self) -> Value {
 		json!({
 			"type": "diagnostic",
-			"level": "error",
+			"level": self.level.label(),
 			"code": self.code,
 			"message": self.message,
 			"span": self.span.as_ref().map(|s| json!({

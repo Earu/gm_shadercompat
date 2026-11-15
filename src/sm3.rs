@@ -93,6 +93,12 @@ fn register_type(token: u32) -> u32 {
 	((token >> 28) & 0x7) | ((token >> 8) & 0x18)
 }
 
+const REG_DEPTHOUT: u32 = 9;
+
+pub fn depth_cmps<'a>(tokens: &[u32], list: &'a [Instruction]) -> Vec<&'a Instruction> {
+	list.iter().filter(|i| i.opcode == 88 && i.len >= 2 && register_type(tokens[i.start + 1]) == REG_DEPTHOUT).collect()
+}
+
 fn usage_name(usage: u32) -> &'static str {
 	match usage {
 		0 => "POSITION", 1 => "BLENDWEIGHT", 2 => "BLENDINDICES", 3 => "NORMAL", 4 => "PSIZE", 5 => "TEXCOORD",
@@ -135,7 +141,7 @@ pub fn classify(tokens: &[u32], list: &[Instruction], at: &Instruction, vertex: 
 
 	if opcode == 95 && at.len >= 4 {
 		match sampler_type(tokens, list, tokens[at.start + 3] & 0x7ff) {
-			Some(SAMPLER_VOLUME) => return problem("tex3dlod", "`tex3Dlod` is not supported by ToGL", "ToGL only translates the LOD form for 2D samplers (`tex2Dlod`)", &["tex3Dlod"]),
+			Some(SAMPLER_VOLUME) => return problem("tex3dlod", "`tex3Dlod` is not supported by ToGL", "ToGL only translates the LOD form for 2D samplers (`tex2Dlod`); when the volume has one mip level, `gm_shadercompat --patch-togl` can rewrite it to `texld` in a separate ToGL copy, which samples the same texels", &["tex3Dlod"]),
 			Some(SAMPLER_CUBE) => return problem("texcubelod", "`texCUBElod` is not supported by ToGL", "ToGL only translates the LOD form for 2D samplers (`tex2Dlod`)", &["texCUBElod"]),
 			_ => {}
 		}

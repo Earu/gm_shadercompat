@@ -3124,9 +3124,9 @@ int D3DToGL::TranslateShader( uint32* code, CUtlBuffer *pBufDisassembledCode, bo
 	
 	// These are not accessed below in a way that will cause them to glow, so
 	// we could overflow these and/or the buffer pointed to by pDisassembledCode
-	m_pBufAttribCode = new CUtlBuffer( 100, 10000, CUtlBuffer::TEXT_BUFFER );
-	m_pBufParamCode = new CUtlBuffer( 100, 10000, CUtlBuffer::TEXT_BUFFER );
-	m_pBufALUCode = new CUtlBuffer( 100, 60000, CUtlBuffer::TEXT_BUFFER );
+	m_pBufAttribCode = new CUtlBuffer( 100, 20000, CUtlBuffer::TEXT_BUFFER );
+	m_pBufParamCode = new CUtlBuffer( 100, 20000, CUtlBuffer::TEXT_BUFFER );
+	m_pBufALUCode = new CUtlBuffer( 100, 120000, CUtlBuffer::TEXT_BUFFER );
 
 	// Pointers to text buffers for assembling sections of the program
 	m_pBufHeaderCode = pBufDisassembledCode;

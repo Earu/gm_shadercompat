@@ -3,9 +3,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::compile::CompileFailure;
-use crate::diag::{Diagnostic, Instruction, Span, Use};
+use crate::diag::{Diagnostic, Instruction, Level, Span, Use};
 use crate::source::{find_name, Sources};
-use crate::{dbug, sm3, togl, vcs};
+use crate::{dbug, glsl, sm3, togl, vcs, vtf};
 
 const MAX_ERRORS_PER_COMBO: usize = 64;
 const GENERIC_TOGL_ERROR: &str = "D3DToGL: GLSL translation error!";
@@ -17,6 +17,7 @@ pub enum Status {
 }
 
 struct Finding {
+	level: Level,
 	code: String,
 	message: String,
 	help: Option<String>,
@@ -28,7 +29,7 @@ struct Finding {
 
 impl Finding {
 	fn plain(code: &str, message: String) -> Finding {
-		Finding { code: code.into(), message, help: None, names: Vec::new(), location: None, instruction: None, notes: Vec::new() }
+		Finding { level: Level::Error, code: code.into(), message, help: None, names: Vec::new(), location: None, instruction: None, notes: Vec::new() }
 	}
 }
 
@@ -39,7 +40,20 @@ pub struct Checker {
 	diagnostics: Vec<Diagnostic>,
 	index: HashMap<Key, usize>,
 	sources: Sources,
+	glslang: Option<PathBuf>,
 }
+
+fn truncation_help(size: usize) -> String {
+	match size {
+		togl::SECTION_ALU => format!("the shader's ALU code is over ToGL's {} byte section buffer", togl::SECTION_ALU),
+		togl::SECTION_DECLARATIONS => format!("the shader's attribute or parameter declarations are over ToGL's {} byte section buffer", togl::SECTION_DECLARATIONS),
+		togl::OUTPUT_SIZE => format!("the shader is over ToGL's {} byte translation buffer", togl::OUTPUT_SIZE),
+		0 => "ToGL cut a string short".into(),
+		n => format!("ToGL cut a string short in a {n} byte internal buffer"),
+	}
+}
+
+const GLSL_ERRORS_SHOWN: usize = 3;
 
 fn absolute(path: &Path) -> PathBuf {
 	std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf())
@@ -85,6 +99,33 @@ impl Checker {
 		self.diagnostics
 	}
 
+	pub fn set_glslang(&mut self, command: Option<PathBuf>) {
+		self.glslang = command;
+	}
+
+	pub fn glslang(&self) -> Option<&Path> {
+		self.glslang.as_deref()
+	}
+
+	pub fn check_vtf(&mut self, texture: &Path, bytes: &[u8]) -> Status {
+		let texture = absolute(texture);
+		match vtf::check(bytes) {
+			Ok(problems) => {
+				for p in problems {
+					let mut finding = Finding::plain(p.code, p.message);
+					finding.level = Level::Warning;
+					finding.help = Some(p.help.into());
+					self.add(&texture, None, 0, finding);
+				}
+				Status::Ok(0)
+			}
+			Err(e) => {
+				self.add_error(&texture, "input", e, Vec::new());
+				Status::Error
+			}
+		}
+	}
+
 	fn add(&mut self, shader: &Path, combo: Option<(u32, u32)>, total: usize, finding: Finding) {
 		let line_key = finding.location.as_ref().map(|(file, line, _)| (file.clone(), *line));
 		let shader_key = line_key.is_none().then(|| shader.to_path_buf());
@@ -105,6 +146,7 @@ impl Checker {
 					Span { file, line, columns, text }
 				});
 				self.diagnostics.push(Diagnostic {
+					level: finding.level,
 					code: finding.code,
 					message: finding.message,
 					span,
@@ -201,6 +243,25 @@ impl Checker {
 		}
 	}
 
+	fn check_glsl(&mut self, shader: &Path, id: (u32, u32), total: usize, command: &Path, text: &str, vertex: bool) -> Result<bool, String> {
+		let errors = glsl::validate(command, text, vertex)?;
+		let Some(first) = errors.first() else { return Ok(true) };
+
+		let mut finding = Finding::plain("glsl", format!("ToGL's GLSL does not compile: {}", first.message));
+		finding.notes = errors
+			.iter()
+			.take(GLSL_ERRORS_SHOWN)
+			.filter_map(|e| {
+				let n = e.line?;
+				let line = text.lines().nth(n.checked_sub(1)?)?.trim();
+				Some(format!("GLSL line {n}: `{line}`"))
+			})
+			.collect();
+		finding.help = Some("a driver that rejects it stops the game with SIGTRAP at the first draw (`CGLMShaderPair::RefreshProgramPair`)".into());
+		self.add(shader, Some(id), total, finding);
+		Ok(false)
+	}
+
 	fn check_combo(&mut self, shader: &Path, combo: &vcs::Combo, total: usize, centroid: u32, glsl: Option<&Path>) -> Result<bool, String> {
 		let vertex = sm3::is_vertex_shader(&combo.tokens);
 		let debug = dbug::parse(&combo.tokens, source_base(shader).as_deref());
@@ -220,6 +281,19 @@ impl Checker {
 			tokens[start..=start + len].fill(0);
 		}
 
+		let depth_cmps = sm3::depth_cmps(&combo.tokens, &list);
+		for at in &depth_cmps {
+			passed = false;
+			let mut finding = Finding::plain("cmp-depth", "`cmp` writes `oDepth` directly, which ToGL turns into invalid GLSL".into());
+			finding.help = Some("ToGL copies the destination of every `cmp` into a vec4 temp, so this becomes `atomic_temp_var = gl_FragDepth`, which does not compile; `gm_shadercompat --patch-togl` can rewrite it in a separate ToGL copy to compute into a spare temp and `mov` that to `oDepth`".into());
+			finding.location = debug.as_ref().and_then(|d| d.location(at.start)).map(|(file, line)| (file.to_path_buf(), line, None));
+			if debug.is_none() {
+				finding.notes.push("this vcs has no debug info; check the .hlsl to get source lines".to_string());
+			}
+			finding.instruction = Some(Instruction { index: at.index, opcode: "cmp" });
+			self.add(shader, Some(id), total, finding);
+		}
+
 		let mut result = togl::translate(&tokens, vertex, centroid);
 
 		if let Some(path) = glsl {
@@ -227,13 +301,18 @@ impl Checker {
 		}
 
 		if result.error.is_none() {
-			if result.truncations == 0 {
-				return Ok(passed);
+			if result.truncations > 0 {
+				let mut finding = Finding::plain("truncated", "ToGL ran out of buffer space and cut the GLSL short".into());
+				finding.help = Some(truncation_help(result.truncated_size));
+				self.add(shader, Some(id), total, finding);
+				return Ok(false);
 			}
-			let mut finding = Finding::plain("truncated", "ToGL ran out of buffer space and cut the GLSL short".into());
-			finding.help = Some("the shader is too large for ToGL's 500000 byte translation buffer".into());
-			self.add(shader, Some(id), total, finding);
-			return Ok(false);
+			if let (true, Some(command)) = (depth_cmps.is_empty(), self.glslang.clone()) {
+				if !self.check_glsl(shader, id, total, &command, &result.glsl, vertex)? {
+					return Ok(false);
+				}
+			}
+			return Ok(passed);
 		}
 
 		for _ in 0..MAX_ERRORS_PER_COMBO {
@@ -264,6 +343,7 @@ impl Checker {
 				Some(id),
 				total,
 				Finding {
+					level: Level::Error,
 					code: problem.code.into(),
 					message: problem.message,
 					help: Some(problem.help.into()),

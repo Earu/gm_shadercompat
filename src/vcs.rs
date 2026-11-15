@@ -9,12 +9,12 @@ pub struct Vcs {
 	pub combos: Vec<Combo>,
 }
 
-const BLOCK_END: u32 = 0xffff_ffff;
-const BLOCK_RAW: u32 = 0x8000_0000;
+pub const BLOCK_END: u32 = 0xffff_ffff;
+pub const BLOCK_RAW: u32 = 0x8000_0000;
 const BLOCK_LZMA: u32 = 0x4000_0000;
-const BLOCK_SIZE_MASK: u32 = 0x3fff_ffff;
+pub const BLOCK_SIZE_MASK: u32 = 0x3fff_ffff;
 
-fn u32_at(data: &[u8], offset: usize) -> Result<u32, String> {
+pub fn u32_at(data: &[u8], offset: usize) -> Result<u32, String> {
 	data.get(offset..offset + 4)
 		.map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
 		.ok_or_else(|| format!("truncated file at offset {offset}"))
@@ -37,6 +37,16 @@ fn decompress_lzma(block: &[u8]) -> Result<Vec<u8>, String> {
 	let mut out = Vec::with_capacity(actual as usize);
 	lzma_rs::lzma_decompress(&mut stream.as_slice(), &mut out).map_err(|e| format!("LZMA: {e:?}"))?;
 	Ok(out)
+}
+
+pub fn decode_block(header: u32, block: &[u8]) -> Result<Vec<u8>, String> {
+	if header & BLOCK_LZMA != 0 {
+		decompress_lzma(block)
+	} else if header & BLOCK_RAW != 0 {
+		Ok(block.to_vec())
+	} else {
+		Err(format!("unsupported block encoding {header:#010x}"))
+	}
 }
 
 fn read_combos(static_id: u32, data: &[u8], combos: &mut Vec<Combo>) -> Result<(), String> {
@@ -78,15 +88,7 @@ pub fn parse(data: &[u8]) -> Result<Vcs, String> {
 
 			let size = (header & BLOCK_SIZE_MASK) as usize;
 			let block = data.get(offset + 4..offset + 4 + size).ok_or("combo block is truncated")?;
-			let decoded = if header & BLOCK_LZMA != 0 {
-				decompress_lzma(block)?
-			} else if header & BLOCK_RAW != 0 {
-				block.to_vec()
-			} else {
-				return Err(format!("unsupported block encoding {header:#010x}"));
-			};
-
-			read_combos(static_id, &decoded, &mut combos)?;
+			read_combos(static_id, &decode_block(header, block)?, &mut combos)?;
 			offset += 4 + size;
 		}
 	}

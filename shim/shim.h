@@ -140,6 +140,7 @@ inline void V_strncpy(char *dest, const char *src, int maxLen)
 inline void V_strcpy(char *dest, const char *src) { strcpy(dest, src); }
 
 extern size_t g_ToglTruncations;
+extern size_t g_ToglTruncatedSize;
 
 inline char *V_strncat(char *dest, const char *src, size_t destSize, int maxCharsToCopy = -1)
 {
@@ -149,6 +150,8 @@ inline char *V_strncat(char *dest, const char *src, size_t destSize, int maxChar
 		srcLen = maxCharsToCopy;
 	if (len + srcLen + 1 > destSize)
 	{
+		if (g_ToglTruncations == 0)
+			g_ToglTruncatedSize = destSize;
 		g_ToglTruncations++;
 		srcLen = destSize > len + 1 ? destSize - len - 1 : 0;
 	}
