@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use crate::compile::CompileFailure;
 use crate::diag::{Diagnostic, Instruction, Level, Span, Use};
-use crate::source::{find_name, Sources};
+use crate::source::{display, find_name, Sources};
 use crate::{dbug, glsl, sm3, togl, vcs, vtf};
 
 const MAX_ERRORS_PER_COMBO: usize = 64;
@@ -180,6 +180,30 @@ impl Checker {
 		let mut finding = Finding::plain(code, message);
 		finding.notes = notes;
 		self.add(&absolute(shader), None, 0, finding);
+	}
+
+	pub fn check_build(&mut self, shader: &Path, built: &[u8], committed: &Path) -> bool {
+		let shader = absolute(shader);
+		let bytes = match fs::read(committed) {
+			Ok(bytes) => bytes,
+			Err(e) => {
+				self.add_error(&shader, "missing-vcs", format!("cannot read {}: {e}", display(committed)), Vec::new());
+				return false;
+			}
+		};
+		match vcs::compare(&bytes, built) {
+			Ok(None) => true,
+			Ok(Some(m)) => {
+				let mut finding = Finding::plain("stale-vcs", format!("{} does not match this source, {} of {} combos differ", display(committed), m.differing, m.total));
+				finding.help = Some("rebuild the .vcs from this source and commit both".into());
+				self.add(&shader, None, 0, finding);
+				false
+			}
+			Err(e) => {
+				self.add_error(&shader, "input", format!("{}: {e}", display(committed)), Vec::new());
+				false
+			}
+		}
 	}
 
 	pub fn add_compile_failure(&mut self, shader: &Path, failure: CompileFailure) {

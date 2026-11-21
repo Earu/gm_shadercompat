@@ -8,7 +8,7 @@ use std::process::ExitCode;
 use gm_shadercompat::{compile, display, find_glslang, patch_vcs, run_to_end, Checker, Compiler, Status, Style};
 use serde_json::json;
 
-const USAGE: &str = "usage: gm_shadercompat [--format human|json] [--color auto|always|never] [--wine <command>] [--glsl <dir>] [--glslang <command> | --no-glslang] [--patch-togl] [--patch-out <dir>] <file.vcs|file.hlsl|file.vtf|dir>...";
+const USAGE: &str = "usage: gm_shadercompat [--format human|json] [--color auto|always|never] [--wine <command>] [--glsl <dir>] [--glslang <command> | --no-glslang] [--patch-togl] [--patch-out <dir>] [--verify <dir>] <file.vcs|file.hlsl|file.vtf|dir>...";
 
 #[derive(PartialEq)]
 enum Format {
@@ -28,6 +28,7 @@ struct Options {
 	glslang: Glslang,
 	patch: bool,
 	patch_dir: Option<PathBuf>,
+	verify_dir: Option<PathBuf>,
 	format: Format,
 	color: Option<bool>,
 	inputs: Vec<PathBuf>,
@@ -40,6 +41,7 @@ fn parse_args() -> Result<Options, String> {
 		glslang: Glslang::Find,
 		patch: false,
 		patch_dir: None,
+		verify_dir: None,
 		format: Format::Human,
 		color: None,
 		inputs: Vec::new(),
@@ -57,6 +59,7 @@ fn parse_args() -> Result<Options, String> {
 				opts.patch = true;
 				opts.patch_dir = Some(PathBuf::from(args.next().ok_or("--patch-out needs a directory")?));
 			}
+			"--verify" => opts.verify_dir = Some(PathBuf::from(args.next().ok_or("--verify needs a directory")?)),
 			"--format" => {
 				opts.format = match args.next().as_deref() {
 					Some("human") => Format::Human,
@@ -149,6 +152,19 @@ fn check(checker: &mut Checker, compiler: &mut Option<Result<Compiler, String>>,
 					return Status::Error;
 				}
 			};
+			if let Some(dir) = &opts.verify_dir {
+				let release = match compile(path, compiler, false, run_to_end) {
+					Ok(compiled) => compiled.vcs,
+					Err(failure) => {
+						checker.add_compile_failure(path, failure);
+						return Status::Error;
+					}
+				};
+				let stem = path.file_stem().unwrap_or_default().to_string_lossy();
+				if !checker.check_build(path, &release, &dir.join(format!("{stem}.vcs"))) {
+					return Status::Error;
+				}
+			}
 			let compiled = match compile(path, compiler, true, run_to_end) {
 				Ok(compiled) => compiled.vcs,
 				Err(failure) => {

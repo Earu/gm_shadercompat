@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 pub struct Combo {
 	pub static_id: u32,
 	pub dynamic_id: u32,
@@ -94,4 +96,27 @@ pub fn parse(data: &[u8]) -> Result<Vcs, String> {
 	}
 
 	Ok(Vcs { centroid_mask, combos })
+}
+
+pub struct Mismatch {
+	pub differing: usize,
+	pub total: usize,
+}
+
+pub fn compare(expected: &[u8], actual: &[u8]) -> Result<Option<Mismatch>, String> {
+	fn index(vcs: &Vcs) -> HashMap<(u32, u32), &Vec<u32>> {
+		vcs.combos.iter().map(|c| ((c.static_id, c.dynamic_id), &c.tokens)).collect()
+	}
+
+	let (a, b) = (parse(expected)?, parse(actual)?);
+	let (a_combos, b_combos) = (index(&a), index(&b));
+
+	let total = a_combos.keys().chain(b_combos.keys().filter(|k| !a_combos.contains_key(k))).count();
+	let differing = if expected.get(4..20) != actual.get(4..20) {
+		total
+	} else {
+		a_combos.iter().filter(|(k, tokens)| b_combos.get(k) != Some(tokens)).count() + b_combos.keys().filter(|k| !a_combos.contains_key(k)).count()
+	};
+
+	Ok((differing > 0).then_some(Mismatch { differing, total }))
 }

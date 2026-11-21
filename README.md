@@ -7,7 +7,7 @@ Checks Garry's Mod shaders against ToGL, the DX9 to OpenGL layer of the native L
 ```
 gm_shadercompat [--format human|json] [--color auto|always|never] [--wine <command>] [--glsl <dir>]
                 [--glslang <command> | --no-glslang] [--patch-togl] [--patch-out <dir>]
-                <file.vcs|file.hlsl|file.vtf|dir>...
+                [--verify <dir>] <file.vcs|file.hlsl|file.vtf|dir>...
 ```
 
 - `.hlsl`: compiles it first with the bundled `ShaderCompile.exe` and `d3dcompiler_47.dll`, the same way gm_autoshader does (`/O 3`, `-ver 30` for names ending in `30`, `20b` otherwise), plus debug info so problems point at source lines. Includes resolve from the file's directory. Outside Windows it runs through `wine`, or the command given with `--wine`.
@@ -17,6 +17,7 @@ gm_shadercompat [--format human|json] [--color auto|always|never] [--wine <comma
 - `--glsl <dir>` writes the GLSL ToGL produced for each combo.
 - `--glslang <command>` compiles that GLSL with glslang (`glslangValidator`). Without it, `glslangValidator` is looked up on `PATH`; `--no-glslang` skips the step.
 - `--patch-togl` applies the bytecode fixes below before checking. `--patch-out <dir>` also writes the patched copy of each changed `.vcs` there.
+- `--verify <dir>` also builds each `.hlsl` without debug info and compares it with `<dir>/<name>.vcs`, combo by combo. A build that differs fails with `stale-vcs`, a missing one with `missing-vcs`. The source CRC in the header is ignored, so comment and whitespace edits pass. Use it in CI to catch a `.hlsl` committed without its rebuilt `.vcs`.
 
 Exit code: 0 when everything passes, 1 when a shader fails, 2 when a file could not be read or compiled.
 
@@ -101,6 +102,7 @@ gm_shadercompat = { git = "https://github.com/Earu/gm_shadercompat" }
 - `Checker::check_vcs(shader, bytes, glsl_dir)` runs ToGL on every combo. `Checker::add_compile_failure` turns a failed compile into diagnostics. `Checker::check_vtf(texture, bytes)` checks a texture.
 - `Checker::set_glslang(Some(command))` turns on the glslang step, which is off by default in the library. `find_glslang()` looks for `glslangValidator` on `PATH`.
 - `patch_vcs(bytes)` returns the `--patch-togl` copy, or `None` when nothing changed.
+- `Checker::check_build(shader, built, committed)` is the `--verify` comparison: `built` is a release `compile`, `committed` the `.vcs` path. It returns false and adds a diagnostic when they differ.
 - `Diagnostic::render_as(style, "warning", root)` renders with another label and paths relative to `root`. `Diagnostic::json` gives the JSON form. `Diagnostic::level` is `Level::Error` or `Level::Warning`.
 
 The library does not bundle the compiler; only the CLI embeds `bin/`.
